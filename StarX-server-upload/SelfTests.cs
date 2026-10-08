@@ -8,6 +8,7 @@ public static class SelfTests
     private static void Check(bool valid, string message) { if (!valid) throw new Exception("FAIL: " + message); }
     public static void Run()
     {
+        TestSupabase();
         string root = Path.Combine(Path.GetTempPath(), "StarX-licenses-" + Guid.NewGuid().ToString("N"));
         string path = Path.Combine(root, "licenses.json"), secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         const long now = 2_000_000_000;
@@ -56,5 +57,45 @@ public static class SelfTests
         Check(!WebhookSignature.Verify(body, $"t={now},v1={signature}", webhookSecret, now + 301), "old webhook replay is rejected");
         Console.WriteLine("PASS: single-use/concurrent redemption, same-installation validation, durable binding, expiry, renewal, revocation, and webhook signatures.");
         Console.WriteLine("Temporary test database: " + root);
+    }
+
+    private static void TestSupabase()
+    {
+        var handler = new FakeSupabase();
+        string secret = new string('a', 64);
+        using var store = new LicenseStore(secret, new SupabaseStore("https://test.supabase.co", "sb_secret_test", handler));
+        store.Issue("manual_remote", "lifetime", null, null, null);
+        string key = store.KeyForSession("manual_remote");
+        Check(handler.ConflictSeen, "Supabase version conflict was retried");
+        Check(store.Activate(key, new string('a', 32), 100) is null, "Supabase key activates");
+        using var other = new LicenseStore(secret, new SupabaseStore("https://test.supabase.co", "sb_secret_test", handler));
+        Check(other.Activate(key, new string('b', 32), 100) is not null, "another server observes the stored binding");
+        handler.Fail = true;
+        bool rejected = false;
+        try { other.Activate(key, new string('a', 32), 100); } catch (InvalidOperationException) { rejected = true; }
+        Check(rejected, "Supabase outage cannot grant access");
+    }
+
+    private sealed class FakeSupabase : HttpMessageHandler
+    {
+        private Database data = new();
+        private long version;
+        public bool ConflictSeen, Fail;
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Check(request.Headers.GetValues("apikey").Single() == "sb_secret_test", "Supabase server key header");
+            if (Fail) return new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable);
+            object result;
+            if (request.RequestUri!.AbsolutePath.EndsWith("starx_read")) result = new { version, data };
+            else {
+                using var body = System.Text.Json.JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
+                if (!ConflictSeen) { ConflictSeen = true; version++; result = false; }
+                else if (body.RootElement.GetProperty("expected_version").GetInt64() != version) result = false;
+                else { data = System.Text.Json.JsonSerializer.Deserialize<Database>(body.RootElement.GetProperty("new_data"))!; version++; result = true; }
+            }
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) {
+                Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(result), Encoding.UTF8, "application/json")
+            };
+        }
     }
 }

@@ -21,7 +21,9 @@ var settings = new PaymentSettings(origin, Env("STRIPE_SECRET_KEY"), Env("STRIPE
     Env("STRIPE_LIFETIME_PRICE"), Env("STRIPE_MONTHLY_PRICE"), Env("STRIPE_THREE_DAY_PRICE"), Env("PAYMENTS_MODE") == "live");
 string adminSecret = Env("ADMIN_SECRET");
 if (adminSecret.Length < 64) throw new InvalidOperationException("ADMIN_SECRET needs at least 64 random characters.");
-using var licenses = new LicenseStore(Env("LICENSE_DATABASE") is { Length: > 0 } db ? db : "data/licenses.json", Env("LICENSING_SECRET"));
+using var licenses = Env("SUPABASE_URL") is { Length: > 0 } supabaseUrl
+    ? new LicenseStore(Env("LICENSING_SECRET"), new SupabaseStore(supabaseUrl, Env("SUPABASE_SECRET_KEY")))
+    : new LicenseStore(Env("LICENSE_DATABASE") is { Length: > 0 } db ? db : "data/licenses.json", Env("LICENSING_SECRET"));
 var payments = new Payments(settings, licenses);
 builder.Services.Configure<ForwardedHeadersOptions>(options => {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;

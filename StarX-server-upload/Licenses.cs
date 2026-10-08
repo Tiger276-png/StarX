@@ -29,10 +29,18 @@ public sealed class Database
 public sealed class LicenseStore : IDisposable
 {
     private readonly object gate = new();
-    private readonly string path;
+    private readonly string path = "";
     private readonly byte[] secret;
-    private readonly FileStream processLock;
-    private Database database;
+    private readonly FileStream? processLock;
+    private readonly SupabaseStore? remote;
+    private Database database = new();
+
+    public LicenseStore(string secret, SupabaseStore remote)
+    {
+        if (secret.Length < 64) throw new ArgumentException("LICENSING_SECRET must contain at least 64 random characters.");
+        this.secret = Encoding.UTF8.GetBytes(secret);
+        this.remote = remote;
+    }
 
     public LicenseStore(string path, string secret)
     {
@@ -53,6 +61,14 @@ public sealed class LicenseStore : IDisposable
     private T Change<T>(Func<Database, T> action)
     {
         lock (gate) {
+            if (remote is not null) {
+                for (int attempt = 0; attempt < 20; attempt++) {
+                    var snapshot = remote.Read();
+                    T value = action(snapshot.Data);
+                    if (remote.Commit(snapshot.Version, snapshot.Data)) return value;
+                }
+                throw new InvalidOperationException("License database is busy. Retry the request.");
+            }
             var next = JsonSerializer.Deserialize<Database>(JsonSerializer.Serialize(database))!;
             T result = action(next);
             string temporary = path + ".new";
@@ -124,7 +140,7 @@ public sealed class LicenseStore : IDisposable
         else { license.Active = false; license.RevokedReason = "Revoked by the seller."; }
         return true;
     });
-    public void Dispose() => processLock.Dispose();
+    public void Dispose() { processLock?.Dispose(); remote?.Dispose(); }
 }
 
 public static class WebhookSignature
