@@ -21,7 +21,8 @@ public sealed class SupabaseStore : IDisposable
     }
     private JsonDocument Call(string function, object body)
     {
-        using var response = client.PostAsJsonAsync(function, body).GetAwaiter().GetResult();
+        using var response = client.PostAsJsonAsync(function, body,
+            new JsonSerializerOptions { PropertyNamingPolicy = null }).GetAwaiter().GetResult();
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException("Supabase license storage request failed (HTTP " + (int)response.StatusCode + ").");
         return JsonDocument.Parse(response.Content.ReadAsStringAsync().GetAwaiter().GetResult());
