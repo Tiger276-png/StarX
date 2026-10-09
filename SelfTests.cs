@@ -19,6 +19,13 @@ public static class SelfTests
             Check(batchKeys.SequenceEqual(store.IssueLifetimeBatch("0123456789abcdef0123456789abcdef", 10000)), "bulk retries return the same keys");
             Check(store.Activate(batchKeys[9999], "cccccccccccccccccccccccccccccccc", now) is null, "bulk key is registered");
             Check(store.Activate(batchKeys[9999], "dddddddddddddddddddddddddddddddd", now) is not null, "bulk key binds to one installation");
+            string[] weeklyBatch = store.IssuePassBatch("0123456789abcdef0123456789abcdef", 5000, "weekly-pass");
+            Check(weeklyBatch.Distinct().Count() == 5000 && !weeklyBatch.Intersect(batchKeys).Any(), "weekly batch keys are distinct from lifetime keys");
+            Check(weeklyBatch.SequenceEqual(store.IssuePassBatch("0123456789abcdef0123456789abcdef", 5000, "weekly-pass")), "weekly batch retries are stable");
+            Check(store.Activate(weeklyBatch[0], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", now) is null, "weekly batch activates");
+            Check(store.Activate(weeklyBatch[0], "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", now) is not null, "weekly batch rejects sharing");
+            Check(store.Activate(weeklyBatch[0], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", now + 604799) is null, "weekly batch works before expiry");
+            Check(store.Activate(weeklyBatch[0], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", now + 604800) is not null, "weekly batch expires after seven days");
             store.Issue("manual_owner", "lifetime", null, null, null);
             string ownerKey = store.KeyForSession("manual_owner");
             Check(store.Activate(ownerKey, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", now + 3_153_600_000) is null, "manual lifetime key has no scheduled expiry");

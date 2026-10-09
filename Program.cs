@@ -123,6 +123,15 @@ bool AdminAllowed(HttpContext context) {
     return CryptographicOperations.FixedTimeEquals(SHA256.HashData(Encoding.UTF8.GetBytes(adminSecret)),
         SHA256.HashData(Encoding.UTF8.GetBytes(supplied[7..])));
 }
+app.MapPost("/admin/issue-pass-batch", async (HttpContext context) => {
+    if (!AdminAllowed(context)) return Results.Unauthorized();
+    var form = await context.Request.ReadFormAsync();
+    string plan = form["plan"].ToString();
+    if (plan is not ("lifetime" or "three-day" or "weekly-pass" or "monthly-pass") ||
+        !int.TryParse(form["count"], out int count) || count is < 1 or > 10000 ||
+        !Guid.TryParseExact(form["batch"], "N", out var batch)) return Results.BadRequest("Invalid plan, batch or count.");
+    return Results.Text(string.Join('\n', licenses.IssuePassBatch(batch.ToString("N"), count, plan)) + "\n", "text/plain; charset=utf-8");
+}).RequireRateLimiting("requests");
 app.MapPost("/admin/issue-lifetime-batch", async (HttpContext context) => {
     if (!AdminAllowed(context)) return Results.Unauthorized();
     var form = await context.Request.ReadFormAsync();

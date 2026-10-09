@@ -103,17 +103,27 @@ public sealed class LicenseStore : IDisposable
         });
     }
 
-    public string[] IssueLifetimeBatch(string batchId, int count)
+    public string[] IssueLifetimeBatch(string batchId, int count) => IssuePassBatch(batchId, count, "lifetime");
+
+    public string[] IssuePassBatch(string batchId, int count, string plan)
     {
+        if (plan is not ("lifetime" or "three-day" or "weekly-pass" or "monthly-pass"))
+            throw new ArgumentException("Invalid pass plan.");
         if (!Regex.IsMatch(batchId, "^[a-f0-9]{32}$") || count is < 1 or > 10000)
             throw new ArgumentException("Use a 32-character batch ID and a count between 1 and 10000.");
-        string[] sessions = Enumerable.Range(0, count).Select(i => $"bulk_lifetime_{batchId}_{i}").ToArray();
+        string[] sessions = Enumerable.Range(0, count).Select(i => $"bulk_{plan}_{batchId}_{i}").ToArray();
         string[] keys = sessions.Select(KeyForSession).ToArray();
         return Change(db => {
             for (int i = 0; i < count; i++) {
                 string hash = KeyHash(keys[i]);
                 if (!db.Licenses.ContainsKey(hash))
-                    db.Licenses.Add(hash, new License { KeyHash = hash, SessionId = sessions[i], Plan = "lifetime" });
+                    db.Licenses.Add(hash, new License { KeyHash = hash, SessionId = sessions[i], Plan = plan,
+                        DurationSeconds = plan switch {
+                            "three-day" => 259200,
+                            "weekly-pass" => 604800,
+                            "monthly-pass" => 2592000,
+                            _ => (long?)null
+                        } });
             }
             return keys;
         });
