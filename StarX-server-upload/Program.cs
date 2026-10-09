@@ -7,8 +7,10 @@ using Microsoft.AspNetCore.HttpOverrides;
 using StarX.Licensing;
 
 if (args.Contains("--self-test")) { SelfTests.Run(); return; }
-var builder = WebApplication.CreateBuilder(args);
-builder.WebHost.UseWebRoot(Path.Combine(AppContext.BaseDirectory, "wwwroot"));
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions {
+    Args = args,
+    WebRootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot")
+});
 builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 65536);
 bool development = Environment.GetEnvironmentVariable("STARX_DEVELOPMENT") == "1";
