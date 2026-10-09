@@ -73,7 +73,7 @@ app.MapGet("/purchase", () => {
     string Cards(string plan, string title, string price, string detail) => "<section><h2>" + title + "</h2><p>" + price
         + "</p><p>" + detail + "</p><form method=post action=/checkout><input type=hidden name=plan value='" + plan
         + "'><button" + disabled + ">Buy " + title + "</button></form></section>";
-    string body = "<h2>Choose your StarX key</h2><p>Each key activates one Windows installation. Once redeemed, it cannot be shared or activated on another installation.</p>" + mode
+    string body = "<section><h2>Download StarX</h2><p>For Windows 64-bit. Download the ZIP, extract it, then open StarX.exe. A valid license key is required to activate.</p><a href='/downloads/StarX-Windows-x64.zip' download>Download StarX for Windows</a></section><h2>Choose your StarX key</h2><p>Each key activates one Windows installation. Once redeemed, it cannot be shared or activated on another installation.</p>" + mode
         + (settings.Configured ? "" : "<p>Purchases are not connected yet. The seller needs to finish the payment setup.</p>")
         + Cards("three-day", "3 days", "AU$2.75 once", "72 hours from your first activation. No automatic renewal.")
         + Cards("weekly", "Weekly", "AU$5 per week", "Renews each week until canceled. One Windows installation.")
@@ -123,12 +123,20 @@ bool AdminAllowed(HttpContext context) {
     return CryptographicOperations.FixedTimeEquals(SHA256.HashData(Encoding.UTF8.GetBytes(adminSecret)),
         SHA256.HashData(Encoding.UTF8.GetBytes(supplied[7..])));
 }
+app.MapPost("/admin/issue-lifetime-batch", async (HttpContext context) => {
+    if (!AdminAllowed(context)) return Results.Unauthorized();
+    var form = await context.Request.ReadFormAsync();
+    if (!int.TryParse(form["count"], out int count) || count is < 1 or > 10000 ||
+        !Guid.TryParseExact(form["batch"], "N", out var batch)) return Results.BadRequest("Invalid batch or count.");
+    string[] keys = licenses.IssueLifetimeBatch(batch.ToString("N"), count);
+    return Results.Text(string.Join('\n', keys) + "\n", "text/plain; charset=utf-8");
+}).RequireRateLimiting("requests");
 app.MapPost("/admin/issue", async (HttpContext context) => {
     if (!AdminAllowed(context)) return Results.Unauthorized();
     var form = await context.Request.ReadFormAsync();
     string plan = form["plan"].ToString();
-    if (plan is not ("lifetime" or "three-day"))
-        return Results.BadRequest("Manual keys support lifetime or three-day access. Monthly keys require a paid subscription.");
+    if (plan is not ("lifetime" or "three-day" or "weekly-pass" or "monthly-pass"))
+        return Results.BadRequest("Choose lifetime, three-day, weekly-pass, or monthly-pass. Recurring subscription keys require a paid subscription.");
     string session = "manual_" + Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
     licenses.Issue(session, plan, null, null, null);
     return Results.Json(new { key = licenses.KeyForSession(session), plan });

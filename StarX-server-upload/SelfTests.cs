@@ -14,6 +14,11 @@ public static class SelfTests
         const long now = 2_000_000_000;
         string lifetimeKey, threeDayKey;
         using (var store = new LicenseStore(path, secret)) {
+            string[] batchKeys = store.IssueLifetimeBatch("0123456789abcdef0123456789abcdef", 10000);
+            Check(batchKeys.Length == 10000 && batchKeys.Distinct().Count() == 10000, "bulk generates 10000 distinct keys");
+            Check(batchKeys.SequenceEqual(store.IssueLifetimeBatch("0123456789abcdef0123456789abcdef", 10000)), "bulk retries return the same keys");
+            Check(store.Activate(batchKeys[9999], "cccccccccccccccccccccccccccccccc", now) is null, "bulk key is registered");
+            Check(store.Activate(batchKeys[9999], "dddddddddddddddddddddddddddddddd", now) is not null, "bulk key binds to one installation");
             store.Issue("manual_owner", "lifetime", null, null, null);
             string ownerKey = store.KeyForSession("manual_owner");
             Check(store.Activate(ownerKey, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", now + 3_153_600_000) is null, "manual lifetime key has no scheduled expiry");
@@ -33,6 +38,16 @@ public static class SelfTests
             Check(store.Activate(threeDayKey, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", now) is null, "3-day access starts on redemption");
             Check(store.Activate(threeDayKey, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", now + 259_199) is null, "3-day access works before expiry");
             Check(store.Activate(threeDayKey, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", now + 259_200) is not null, "3-day access expires after 72 hours");
+            foreach (var pass in new[] { (Plan: "weekly-pass", Days: 7), (Plan: "monthly-pass", Days: 30) }) {
+                string session = "payhip_" + pass.Plan;
+                store.Issue(session, pass.Plan, null, null, null);
+                string passKey = store.KeyForSession(session);
+                long activation = now + 500;
+                Check(store.Activate(passKey, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", activation) is null, "pass starts at first activation");
+                Check(store.Activate(passKey, "dddddddddddddddddddddddddddddddd", activation) is not null, "pass rejects another installation");
+                Check(store.Activate(passKey, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", activation + pass.Days * 86400 - 1) is null, "pass works until expiry");
+                Check(store.Activate(passKey, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", activation + pass.Days * 86400) is not null, "pass expires on time");
+            }
             store.Issue("cs_test_monthly", "monthly", "sub_monthly", null, now + 100);
             store.Issue("cs_test_weekly", "weekly", "sub_weekly", null, now + 604800);
             string weeklyKey = store.KeyForSession("cs_test_weekly");

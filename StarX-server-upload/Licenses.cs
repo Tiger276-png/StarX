@@ -91,10 +91,31 @@ public sealed class LicenseStore : IDisposable
             bool refunded = payment is not null && db.RevokedPayments.Contains(payment);
             var license = new License { KeyHash = hash, SessionId = sessionId, Plan = plan,
                 SubscriptionId = subscription, PaymentIntent = payment, ExpiresAt = expires,
-                DurationSeconds = plan == "three-day" ? 3 * 24 * 60 * 60 : null,
+                DurationSeconds = plan switch {
+                    "three-day" => 3 * 24 * 60 * 60,
+                    "weekly-pass" => 7 * 24 * 60 * 60,
+                    "monthly-pass" => 30 * 24 * 60 * 60,
+                    _ => (long?)null
+                },
                 Active = !refunded, RevokedReason = refunded ? "Payment refunded or disputed." : null };
             db.Licenses.Add(hash, license);
             return license;
+        });
+    }
+
+    public string[] IssueLifetimeBatch(string batchId, int count)
+    {
+        if (!Regex.IsMatch(batchId, "^[a-f0-9]{32}$") || count is < 1 or > 10000)
+            throw new ArgumentException("Use a 32-character batch ID and a count between 1 and 10000.");
+        string[] sessions = Enumerable.Range(0, count).Select(i => $"bulk_lifetime_{batchId}_{i}").ToArray();
+        string[] keys = sessions.Select(KeyForSession).ToArray();
+        return Change(db => {
+            for (int i = 0; i < count; i++) {
+                string hash = KeyHash(keys[i]);
+                if (!db.Licenses.ContainsKey(hash))
+                    db.Licenses.Add(hash, new License { KeyHash = hash, SessionId = sessions[i], Plan = "lifetime" });
+            }
+            return keys;
         });
     }
 
