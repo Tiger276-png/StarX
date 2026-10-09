@@ -34,6 +34,12 @@ public static class SelfTests
             Check(store.Activate(threeDayKey, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", now + 259_199) is null, "3-day access works before expiry");
             Check(store.Activate(threeDayKey, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", now + 259_200) is not null, "3-day access expires after 72 hours");
             store.Issue("cs_test_monthly", "monthly", "sub_monthly", null, now + 100);
+            store.Issue("cs_test_weekly", "weekly", "sub_weekly", null, now + 604800);
+            string weeklyKey = store.KeyForSession("cs_test_weekly");
+            Check(store.Activate(weeklyKey, "ffffffffffffffffffffffffffffffff", now + 604799) is null, "weekly access lasts through its paid period");
+            Check(store.Activate(weeklyKey, "ffffffffffffffffffffffffffffffff", now + 604800) is not null, "unrenewed weekly access expires");
+            store.UpdateSubscription("sub_weekly", true, now + 1209600);
+            Check(store.Activate(weeklyKey, "ffffffffffffffffffffffffffffffff", now + 604801) is null, "weekly renewal restores access");
             string monthlyKey = store.KeyForSession("cs_test_monthly");
             Check(store.Activate(monthlyKey, "cccccccccccccccccccccccccccccccc", now + 100) is not null, "unrenewed monthly access expires");
             store.UpdateSubscription("sub_monthly", true, now + 500);

@@ -21,7 +21,7 @@ if (!Uri.TryCreate(origin, UriKind.Absolute, out var publicAddress) ||
     (publicAddress.Scheme != "https" && !(development && publicAddress.IsLoopback)))
     throw new InvalidOperationException("Set PUBLIC_BASE_URL to your public HTTPS address.");
 var settings = new PaymentSettings(origin, Env("STRIPE_SECRET_KEY"), Env("STRIPE_WEBHOOK_SECRET"),
-    Env("STRIPE_LIFETIME_PRICE"), Env("STRIPE_MONTHLY_PRICE"), Env("STRIPE_THREE_DAY_PRICE"), Env("PAYMENTS_MODE") == "live");
+    Env("STRIPE_LIFETIME_PRICE"), Env("STRIPE_MONTHLY_PRICE"), Env("STRIPE_THREE_DAY_PRICE"), Env("PAYMENTS_MODE") == "live", Env("STRIPE_WEEKLY_PRICE"));
 string adminSecret = Env("ADMIN_SECRET");
 if (adminSecret.Length < 64) throw new InvalidOperationException("ADMIN_SECRET needs at least 64 random characters.");
 using var licenses = Env("SUPABASE_URL") is { Length: > 0 } supabaseUrl
@@ -76,6 +76,7 @@ app.MapGet("/purchase", () => {
     string body = "<h2>Choose your StarX key</h2><p>Each key activates one Windows installation. Once redeemed, it cannot be shared or activated on another installation.</p>" + mode
         + (settings.Configured ? "" : "<p>Purchases are not connected yet. The seller needs to finish the payment setup.</p>")
         + Cards("three-day", "3 days", "AU$2.75 once", "72 hours from your first activation. No automatic renewal.")
+        + Cards("weekly", "Weekly", "AU$5 per week", "Renews each week until canceled. One Windows installation.")
         + Cards("monthly", "Monthly", "AU$10 per month", "Renews each month until canceled. Manage renewal through the Stripe receipt link provided by the seller.")
         + Cards("lifetime", "Lifetime", "AU$25 once", "No scheduled expiry. Requires internet to verify the license.")
         + "<p>After confirmed payment, the next page shows your key. Save the key and your purchase receipt.</p>";
@@ -85,7 +86,7 @@ app.MapPost("/checkout", async (HttpContext context) => {
     if (!settings.Configured) return Results.Text("Purchases are not connected yet.", statusCode: 503);
     var form = await context.Request.ReadFormAsync();
     string plan = form["plan"].ToString();
-    if (plan is not ("lifetime" or "monthly" or "three-day")) return Results.BadRequest("Choose a valid plan.");
+    if (plan is not ("lifetime" or "weekly" or "monthly" or "three-day")) return Results.BadRequest("Choose a valid plan.");
     string url = await payments.Checkout(plan);
     context.Response.StatusCode = 303;
     context.Response.Headers.Location = url;

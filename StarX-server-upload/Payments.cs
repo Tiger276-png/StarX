@@ -4,12 +4,12 @@ using System.Text.Json;
 namespace StarX.Licensing;
 
 public sealed record PaymentSettings(string Origin, string SecretKey, string WebhookSecret,
-                                     string LifetimePrice, string MonthlyPrice, string ThreeDayPrice, bool Live)
+                                     string LifetimePrice, string MonthlyPrice, string ThreeDayPrice, bool Live, string WeeklyPrice = "")
 {
     public bool Configured => SecretKey.StartsWith(Live ? "sk_live_" : "sk_test_", StringComparison.Ordinal)
         && WebhookSecret.StartsWith("whsec_", StringComparison.Ordinal)
         && LifetimePrice.StartsWith("price_", StringComparison.Ordinal) && MonthlyPrice.StartsWith("price_", StringComparison.Ordinal)
-        && ThreeDayPrice.StartsWith("price_", StringComparison.Ordinal);
+        && ThreeDayPrice.StartsWith("price_", StringComparison.Ordinal) && WeeklyPrice.StartsWith("price_", StringComparison.Ordinal);
 }
 
 public sealed class Payments(PaymentSettings settings, LicenseStore licenses)
@@ -29,10 +29,10 @@ public sealed class Payments(PaymentSettings settings, LicenseStore licenses)
     public async Task<string> Checkout(string plan)
     {
         if (!settings.Configured) throw new InvalidOperationException("Purchases are not connected yet.");
-        if (plan is not ("lifetime" or "monthly" or "three-day")) throw new ArgumentException("Choose lifetime, monthly, or three-day.");
+        if (plan is not ("lifetime" or "weekly" or "monthly" or "three-day")) throw new ArgumentException("Choose lifetime, weekly, monthly, or three-day.");
         using var session = await Request("checkout/sessions", new() {
-            ["mode"] = plan == "monthly" ? "subscription" : "payment",
-            ["line_items[0][price]"] = plan == "monthly" ? settings.MonthlyPrice : plan == "three-day" ? settings.ThreeDayPrice : settings.LifetimePrice,
+            ["mode"] = plan is "monthly" or "weekly" ? "subscription" : "payment",
+            ["line_items[0][price]"] = plan == "weekly" ? settings.WeeklyPrice : plan == "monthly" ? settings.MonthlyPrice : plan == "three-day" ? settings.ThreeDayPrice : settings.LifetimePrice,
             ["line_items[0][quantity]"] = "1", ["metadata[starx_plan]"] = plan,
             ["success_url"] = settings.Origin + "/purchase/success?session_id={CHECKOUT_SESSION_ID}",
             ["cancel_url"] = settings.Origin + "/purchase",
@@ -57,17 +57,23 @@ public sealed class Payments(PaymentSettings settings, LicenseStore licenses)
             throw new InvalidOperationException("This purchase is not a StarX license.");
         string? price = items[0].GetProperty("price").GetProperty("id").GetString();
         string plan = price == settings.LifetimePrice ? "lifetime" : price == settings.MonthlyPrice ? "monthly"
-            : price == settings.ThreeDayPrice ? "three-day"
+            : price == settings.WeeklyPrice ? "weekly" : price == settings.ThreeDayPrice ? "three-day"
             : throw new InvalidOperationException("This purchase is not a configured StarX product.");
         var paidPrice = items[0].GetProperty("price");
-        int expectedAmount = plan == "lifetime" ? 2500 : plan == "monthly" ? 1000 : 275;
+        int expectedAmount = plan == "lifetime" ? 2500 : plan == "monthly" ? 1000 : plan == "weekly" ? 500 : 275;
         if (paidPrice.GetProperty("currency").GetString() != "aud" || paidPrice.GetProperty("unit_amount").GetInt32() != expectedAmount)
             throw new InvalidOperationException("The product price must match the configured AUD StarX prices.");
-        if (session.GetProperty("mode").GetString() != (plan == "monthly" ? "subscription" : "payment"))
+        if (session.GetProperty("mode").GetString() != (plan is "monthly" or "weekly" ? "subscription" : "payment"))
             throw new InvalidOperationException("The purchase type is incorrect.");
+        if (plan is "monthly" or "weekly") {
+            var recurring = paidPrice.GetProperty("recurring");
+            if (recurring.GetProperty("interval").GetString() != (plan == "weekly" ? "week" : "month")
+                || recurring.GetProperty("interval_count").GetInt32() != 1)
+                throw new InvalidOperationException("The subscription billing interval is incorrect.");
+        }
         string? subscription = OptionalId(session, "subscription"), payment = OptionalId(session, "payment_intent");
         long? expiry = null;
-        if (plan == "monthly") {
+        if (plan is "monthly" or "weekly") {
             if (subscription is null) throw new InvalidOperationException("Subscription is missing.");
             var state = await SubscriptionState(subscription);
             if (!state.Active) throw new InvalidOperationException("This subscription is not active.");
@@ -85,7 +91,7 @@ public sealed class Payments(PaymentSettings settings, LicenseStore licenses)
         bool active = subscription.GetProperty("status").GetString() == "active";
         long expiry = subscription.TryGetProperty("current_period_end", out var legacy) ? legacy.GetInt64() : 0;
         foreach (var item in subscription.GetProperty("items").GetProperty("data").EnumerateArray()) {
-            if (item.GetProperty("price").GetProperty("id").GetString() != settings.MonthlyPrice) continue;
+            string? itemPrice = item.GetProperty("price").GetProperty("id").GetString(); if (itemPrice != settings.MonthlyPrice && itemPrice != settings.WeeklyPrice) continue;
             if (item.TryGetProperty("current_period_end", out var end)) expiry = end.GetInt64();
         }
         if (expiry <= 0) throw new InvalidOperationException("Could not verify the subscription billing period.");
