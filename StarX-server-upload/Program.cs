@@ -13,7 +13,8 @@ builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 65536);
 bool development = Environment.GetEnvironmentVariable("STARX_DEVELOPMENT") == "1";
 string Env(string name) => Environment.GetEnvironmentVariable(name) ?? "";
-string origin = Env("PUBLIC_BASE_URL").TrimEnd('/');
+string origin = (Env("PUBLIC_BASE_URL") is { Length: > 0 } configuredOrigin
+    ? configuredOrigin : Env("RENDER_EXTERNAL_URL")).TrimEnd('/');
 if (!Uri.TryCreate(origin, UriKind.Absolute, out var publicAddress) ||
     (publicAddress.Scheme != "https" && !(development && publicAddress.IsLoopback)))
     throw new InvalidOperationException("Set PUBLIC_BASE_URL to your public HTTPS address.");
