@@ -14,9 +14,11 @@ public sealed class SupabaseStore : IDisposable
             throw new ArgumentException("SUPABASE_URL must be an HTTPS project URL.");
         if (!key.StartsWith("sb_secret_", StringComparison.Ordinal))
             throw new ArgumentException("Set SUPABASE_SECRET_KEY to a server-side Supabase secret key.");
-        client = handler is null ? new HttpClient() : new HttpClient(handler);
+        client = handler is null ? new HttpClient(new HttpClientHandler {
+            AutomaticDecompression = System.Net.DecompressionMethods.All
+        }) : new HttpClient(handler);
         client.BaseAddress = new Uri(url.TrimEnd('/') + "/rest/v1/rpc/");
-        client.Timeout = TimeSpan.FromSeconds(8);
+        client.Timeout = TimeSpan.FromSeconds(20);
         client.DefaultRequestHeaders.Add("apikey", key);
     }
     private JsonDocument Call(string function, object body)
@@ -37,6 +39,21 @@ public sealed class SupabaseStore : IDisposable
     {
         using var result = Call("starx_commit", new { expected_version = version, new_data = data });
         return result.RootElement.GetBoolean();
+    }
+    public License? ReadLicense(string hash)
+    {
+        if (hash.Length != 64 || hash.Any(c => !Uri.IsHexDigit(c))) throw new ArgumentException("Invalid key hash.");
+        // PostgREST projects just this JSON property; never transfer the complete
+        // inventory to validate an existing key. Existing table permissions apply.
+        string select = Uri.EscapeDataString("license:data->Licenses->" + hash);
+        using var response = client.GetAsync("../starx_state?id=eq.1&select=" + select).GetAwaiter().GetResult();
+        if (!response.IsSuccessStatusCode)
+            throw new InvalidOperationException("Supabase license lookup failed (HTTP " + (int)response.StatusCode + ").");
+        using var result = JsonDocument.Parse(response.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+        if (result.RootElement.ValueKind != JsonValueKind.Array || result.RootElement.GetArrayLength() != 1)
+            throw new InvalidDataException("License storage is unavailable.");
+        var license = result.RootElement[0].GetProperty("license");
+        return license.ValueKind == JsonValueKind.Null ? null : license.Deserialize<License>();
     }
     public void Dispose() => client.Dispose();
 }

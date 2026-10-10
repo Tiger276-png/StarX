@@ -135,16 +135,40 @@ public sealed class LicenseStore : IDisposable
         if (!Regex.IsMatch(key, "^SX1-[A-F0-9]{48}$")) return "Enter the complete StarX license key from your purchase.";
         if (!Regex.IsMatch(device, "^[a-f0-9]{32}$")) return "The installation identifier is invalid.";
         string hash = KeyHash(key), deviceHash = DeviceHash(device);
+        // Rechecking an already bound key only needs a fresh read. Avoid sending
+        // the entire key inventory back to Supabase on every periodic check.
+        lock (gate) {
+            License? existing = remote is null ? database.Licenses.GetValueOrDefault(hash) : remote.ReadLicense(hash);
+            string? error = ActivationError(existing, deviceHash, now);
+            if (error is not null) return error;
+            if (existing!.DeviceHash is not null &&
+                (existing.DurationSeconds is null || existing.ExpiresAt is not null)) return null;
+        }
+        // First redemption/reset still uses a version-checked commit and repeats
+        // validation so simultaneous installations cannot claim the same key.
         return Change(db => {
-            if (!db.Licenses.TryGetValue(hash, out var license)) return "This key was not found. Check your purchase key.";
-            if (!license.Active || license.RevokedReason is not null || (license.ExpiresAt is long expiry && expiry <= now))
-                return "This license is inactive or expired. Check your payment or contact the seller.";
-            if (license.DeviceHash is not null && license.DeviceHash != deviceHash)
-                return "This key is already redeemed on another Windows installation. It cannot be redeemed again.";
-            license.DeviceHash ??= deviceHash;
-            if (license.DurationSeconds is long duration && license.ExpiresAt is null) license.ExpiresAt = now + duration;
+            string? error = ActivationError(db, hash, deviceHash, now, out var license);
+            if (error is not null) return error;
+            License bound = license!;
+            bound.DeviceHash ??= deviceHash;
+            if (bound.DurationSeconds is long duration && bound.ExpiresAt is null) bound.ExpiresAt = now + duration;
             return (string?)null;
         });
+    }
+
+    private static string? ActivationError(Database db, string hash, string deviceHash, long now, out License? license)
+    {
+        db.Licenses.TryGetValue(hash, out license);
+        return ActivationError(license, deviceHash, now);
+    }
+    private static string? ActivationError(License? license, string deviceHash, long now)
+    {
+        if (license is null) return "This key was not found. Check your purchase key.";
+        if (!license.Active || license.RevokedReason is not null || (license.ExpiresAt is long expiry && expiry <= now))
+            return "This license is inactive or expired. Check your payment or contact the seller.";
+        if (license.DeviceHash is not null && license.DeviceHash != deviceHash)
+            return "This key is already redeemed on another Windows installation. It cannot be redeemed again.";
+        return null;
     }
 
     public void UpdateSubscription(string id, bool active, long expiry) => Change(db => {

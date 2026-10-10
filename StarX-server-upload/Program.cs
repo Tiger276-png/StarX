@@ -48,7 +48,7 @@ app.Use(async (context, next) => {
     context.Response.Headers["Content-Security-Policy"] = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; form-action 'self' https://checkout.stripe.com https://billing.stripe.com; frame-ancestors 'none'; base-uri 'none'";
     if (!development && !context.Request.IsHttps) { context.Response.StatusCode = 400; await context.Response.WriteAsync("HTTPS is required."); return; }
     try { await next(context); }
-    catch (Exception exception) when (exception is not OperationCanceledException) {
+    catch (Exception exception) when (exception is not OperationCanceledException || !context.RequestAborted.IsCancellationRequested) {
         app.Logger.LogError("A StarX request failed ({Type}).", exception.GetType().Name);
         if (!context.Response.HasStarted) {
             context.Response.StatusCode = 503;

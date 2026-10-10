@@ -96,12 +96,22 @@ public static class SelfTests
         string key = store.KeyForSession("manual_remote");
         Check(handler.ConflictSeen, "Supabase version conflict was retried");
         Check(store.Activate(key, new string('a', 32), 100) is null, "Supabase key activates");
+        int commits = handler.CommitCalls;
+        int reads = handler.InventoryReads;
+        Check(store.Activate(key, new string('a', 32), 101) is null, "bound key rechecks successfully");
+        Check(handler.CommitCalls == commits, "routine validation never rewrites the full license inventory");
+        Check(handler.InventoryReads == reads, "routine validation fetches only one key, not the inventory");
         using var other = new LicenseStore(secret, new SupabaseStore("https://test.supabase.co", "sb_secret_test", handler));
         Check(other.Activate(key, new string('b', 32), 100) is not null, "another server observes the stored binding");
+        Check(handler.CommitCalls == commits, "rejected installation does not write the inventory");
+        Check(store.AdminChange(key, false), "remote key can be revoked");
+        Check(other.Activate(key, new string('a', 32), 102) is not null, "read-only validation observes revocation from another server");
         handler.Fail = true;
         bool rejected = false;
         try { other.Activate(key, new string('a', 32), 100); } catch (InvalidOperationException) { rejected = true; }
         Check(rejected, "Supabase outage cannot grant access");
+        handler.Fail = false;
+        Check(other.Activate("SX1-" + new string('0', 48), new string('a', 32), 100) is not null, "missing projected key is rejected");
     }
 
     private sealed class FakeSupabase : HttpMessageHandler
@@ -109,13 +119,23 @@ public static class SelfTests
         private Database data = new();
         private long version;
         public bool ConflictSeen, Fail;
+        public int CommitCalls;
+        public int InventoryReads;
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Check(request.Headers.GetValues("apikey").Single() == "sb_secret_test", "Supabase server key header");
             if (Fail) return new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable);
             object result;
-            if (request.RequestUri!.AbsolutePath.EndsWith("starx_read")) result = new { version, data };
+            if (request.Method == HttpMethod.Get) {
+                Check(request.RequestUri!.AbsolutePath == "/rest/v1/starx_state", "projected lookup uses the state table");
+                string query = Uri.UnescapeDataString(request.RequestUri.Query);
+                Check(query.Contains("id=eq.1&select=license:data->Licenses->"), "projected lookup selects the requested key");
+                string hash = query.Split("->").Last();
+                result = new[] { new { license = data.Licenses.GetValueOrDefault(hash) } };
+            }
+            else if (request.RequestUri!.AbsolutePath.EndsWith("starx_read")) { InventoryReads++; result = new { version, data }; }
             else {
+                CommitCalls++;
                 using var body = System.Text.Json.JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
                 if (!ConflictSeen) { ConflictSeen = true; version++; result = false; }
                 else if (body.RootElement.GetProperty("expected_version").GetInt64() != version) result = false;
